@@ -71,7 +71,10 @@
         .bg-good { background-color: var(--btn-good); }
         .bg-easy { background-color: var(--btn-easy); }
 
-        .empty-state { text-align: center; padding: 50px; background: var(--surface); border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); width: 100%; }
+        .empty-state { text-align: center; padding: 50px; background: var(--surface); border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px;}
+        
+        /* Утилита для управления экранами */
+        .hidden { display: none !important; }
         
         @media (max-width: 768px) {
             .card-face { padding: 30px; }
@@ -103,29 +106,48 @@
     </div>
 
     <div id="workspace">
-        <div class="card-container" id="card-container">
-            <div class="card" id="flashcard">
-                <div class="card-face card-front">
-                    <div class="question-text" id="front-text"></div>
-                    <div class="feynman-draft">
-                        <textarea id="draft-input" placeholder="Метод Фейнмана: коротко запишите суть ответа до проверки..."></textarea>
+        
+        <!-- Стартовый экран приветствия -->
+        <div id="welcome-screen" class="empty-state">
+            <h2>Добро пожаловать в Learning Hub!</h2>
+            <p style="margin: 15px 0; color: var(--text-muted); max-width: 500px;">Выберите колоду в меню сверху и нажмите кнопку ниже, чтобы начать сессию интервального повторения.</p>
+            <button id="start-session-btn" class="btn btn-primary" style="width: auto; padding: 12px 30px;">Начать сессию</button>
+        </div>
+
+        <!-- Рабочая зона карточек (скрыта по умолчанию) -->
+        <div id="study-area" class="hidden" style="width: 100%;">
+            <div class="card-container" id="card-container">
+                <div class="card" id="flashcard">
+                    <div class="card-face card-front">
+                        <div class="question-text" id="front-text"></div>
+                        <div class="feynman-draft">
+                            <textarea id="draft-input" placeholder="Метод Фейнмана: коротко запишите суть ответа до проверки..."></textarea>
+                        </div>
+                    </div>
+                    <div class="card-face card-back">
+                        <div class="answer-text" id="back-text"></div>
                     </div>
                 </div>
-                <div class="card-face card-back">
-                    <div class="answer-text" id="back-text"></div>
+            </div>
+
+            <div class="actions">
+                <button id="show-answer-btn" class="btn btn-primary">Показать ответ</button>
+                <div class="sm2-buttons" id="sm2-buttons">
+                    <button class="btn btn-sm2 bg-again" onclick="handleRating(0)">Снова<br>(<1м)</button>
+                    <button class="btn btn-sm2 bg-hard" onclick="handleRating(1)">Трудно<br>(дней)</button>
+                    <button class="btn btn-sm2 bg-good" onclick="handleRating(2)">Хорошо<br>(дней)</button>
+                    <button class="btn btn-sm2 bg-easy" onclick="handleRating(3)">Легко<br>(дней)</button>
                 </div>
             </div>
         </div>
 
-        <div class="actions">
-            <button id="show-answer-btn" class="btn btn-primary">Показать ответ</button>
-            <div class="sm2-buttons" id="sm2-buttons">
-                <button class="btn btn-sm2 bg-again" onclick="handleRating(0)">Снова<br>(<1м)</button>
-                <button class="btn btn-sm2 bg-hard" onclick="handleRating(1)">Трудно<br>(дней)</button>
-                <button class="btn btn-sm2 bg-good" onclick="handleRating(2)">Хорошо<br>(дней)</button>
-                <button class="btn btn-sm2 bg-easy" onclick="handleRating(3)">Легко<br>(дней)</button>
-            </div>
+        <!-- Экран завершения (скрыт по умолчанию) -->
+        <div id="completion-screen" class="empty-state hidden">
+            <h3>Отличная работа!</h3>
+            <p style="margin: 15px 0; color: var(--text-muted);">Вы повторили все карточки в этой колоде на сегодня.</p>
+            <button id="restart-btn" class="btn btn-primary" style="width: auto; padding: 12px 30px;">На главную</button>
         </div>
+
     </div>
 
     <script>
@@ -156,6 +178,7 @@
 
         let currentDeckId = "deck_skills";
         let isReverseMode = false;
+        let isSessionStarted = false;
         let todayQueue = [];
         let currentCard = null;
         let isFlipped = false;
@@ -211,6 +234,15 @@
             return Math.round(stats.interval * (rating === 1 ? 1.2 : rating === 3 ? stats.ease * 1.3 : stats.ease)) + "д";
         }
 
+        function getPendingCount(deckId) {
+            const deck = RAW_DECKS.find(d => d.id === deckId);
+            const now = Date.now();
+            return deck.cards.filter(card => {
+                const stats = getCardStats(deckId, card.id);
+                return stats.nextReview <= now;
+            }).length;
+        }
+
         function initApp() {
             const selector = document.getElementById('deck-selector');
             RAW_DECKS.forEach(d => {
@@ -220,15 +252,32 @@
                 selector.appendChild(opt);
             });
 
+            // Обновляем статистику без запуска сессии при смене колоды
             selector.addEventListener('change', (e) => {
                 currentDeckId = e.target.value;
-                buildQueue();
+                if (isSessionStarted) {
+                    buildQueue();
+                } else {
+                    document.getElementById('queue-count').textContent = getPendingCount(currentDeckId);
+                }
             });
 
             document.getElementById('reverse-toggle').addEventListener('click', (e) => {
                 isReverseMode = !isReverseMode;
                 e.target.classList.toggle('active');
+                if (isSessionStarted) buildQueue();
+            });
+            
+            // Логика кнопок начала и сброса
+            document.getElementById('start-session-btn').addEventListener('click', () => {
+                isSessionStarted = true;
+                document.getElementById('welcome-screen').classList.add('hidden');
+                document.getElementById('study-area').classList.remove('hidden');
                 buildQueue();
+            });
+
+            document.getElementById('restart-btn').addEventListener('click', () => {
+                location.reload();
             });
             
             // Логика экспорта
@@ -255,7 +304,8 @@
                     JSON.parse(decoded); // Проверка на валидность JSON
                     localStorage.setItem('ai_hub_progress', decoded);
                     alert('✅ Прогресс успешно загружен!');
-                    buildQueue();
+                    if (isSessionStarted) buildQueue();
+                    else document.getElementById('queue-count').textContent = getPendingCount(currentDeckId);
                 } catch (e) {
                     alert('❌ Ошибка импорта! Неверный формат кода.');
                 }
@@ -263,7 +313,8 @@
 
             document.getElementById('show-answer-btn').addEventListener('click', flipCard);
 
-            buildQueue();
+            // Инициализация счетчика для приветственного экрана
+            document.getElementById('queue-count').textContent = getPendingCount(currentDeckId);
         }
 
         function buildQueue() {
@@ -285,12 +336,16 @@
         }
 
         function nextCard() {
-            const workspace = document.getElementById('workspace');
-            
+            // Если очередь пуста, скрываем рабочую зону и показываем экран завершения
             if (todayQueue.length === 0) {
-                workspace.innerHTML = `<div class="empty-state"><h3>Отличная работа!</h3><p>Вы повторили все карточки в этой колоде на сегодня.</p></div>`;
+                document.getElementById('study-area').classList.add('hidden');
+                document.getElementById('completion-screen').classList.remove('hidden');
                 return;
             }
+
+            // Убедимся, что рабочая зона видима (например, если сменили колоду с экрана завершения)
+            document.getElementById('study-area').classList.remove('hidden');
+            document.getElementById('completion-screen').classList.add('hidden');
 
             currentCard = todayQueue[0];
             isFlipped = false;
@@ -345,9 +400,9 @@
         document.addEventListener('keydown', (e) => {
             if (e.code === 'Space' && currentCard && document.activeElement.tagName !== 'TEXTAREA') {
                 e.preventDefault();
-                if (!isFlipped) flipCard();
+                if (!isFlipped && isSessionStarted && todayQueue.length > 0) flipCard();
             }
-            if (isFlipped) {
+            if (isFlipped && isSessionStarted) {
                 if (e.key === '1') handleRating(0);
                 if (e.key === '2') handleRating(1);
                 if (e.key === '3') handleRating(2);
